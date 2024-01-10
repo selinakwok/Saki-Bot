@@ -123,7 +123,6 @@ async def on_message(message):
                 if rank in [500, 1000]:
                     start_hrs = (now - bot.start_day).total_seconds() / (60 * 60)
                     start_hrs = round(start_hrs, 2)
-                    update_tracker(start_hrs, rank, pt)
                     if rank == 500:
                         cur.execute("INSERT INTO timept500 VALUES (?, ?, ?)", (bot.event_no, start_hrs, pt))
                         con.commit()
@@ -661,8 +660,8 @@ async def start(ctx, event_no: int):
             start_dt = (i["startAt"]) / 1000
             end_dt = (i["aggregateAt"]) / 1000 + 1  # 21:00 HKT
             break
-    bot.start_day = datetime.datetime.fromtimestamp(start_dt)
-    bot.end_day = datetime.datetime.fromtimestamp(end_dt)
+    bot.start_day = datetime.datetime.fromtimestamp(start_dt) + datetime.timedelta(hours=8)
+    bot.end_day = datetime.datetime.fromtimestamp(end_dt) + datetime.timedelta(hours=8)
 
     try:
         cur.execute("INSERT INTO timept500 VALUES (?, 0, 0)", (bot.event_no, ))
