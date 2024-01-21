@@ -114,7 +114,7 @@ async def on_message(message):
             await message.add_reaction(tick)
             return"""
 
-        if now.date() == bot.start_day.date():
+        if now.date() == bot.start_day.date():  # D1
             if 0 <= now.minute <= 10 and now.hour == 22:
                 start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
                 update_tracker(start_hrs, rank, pt)
@@ -131,11 +131,11 @@ async def on_message(message):
                         con.commit()
                     await message.add_reaction(tick)
                 else:
-                    await error(message, "現在不接受分數上報 (上報時間為00, 12, 16, 20的00-10分) <:ln_saki_cry:1008601057380814849>")
+                    await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
                     return
 
-        elif bot.start_day.date() < now.date() < bot.end_day.date():
-            if 0 <= now.minute <= 10 and now.hour in [0, 12, 22]:
+        elif bot.start_day.date() < now.date() < bot.end_day.date():  # middle days
+            if 0 <= now.minute <= 10 and now.hour in [0, 22]:
                 start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
                 update_tracker(start_hrs, rank, pt)
                 await message.add_reaction(tick)
@@ -151,11 +151,11 @@ async def on_message(message):
                         con.commit()
                     await message.add_reaction(tick)
                 else:
-                    await error(message, "現在不接受分數上報 (上報時間為00, 12, 16, 20的00-10分) <:ln_saki_cry:1008601057380814849>")
+                    await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
                     return
 
         elif now.date() == bot.end_day.date():
-            if now.hour in [0, 12, 20] and 0 <= now.minute <= 10:
+            if now.hour in [0, 20] and 0 <= now.minute <= 10:
                 start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
                 update_tracker(start_hrs, rank, pt)
                 await message.add_reaction(tick)
@@ -175,7 +175,7 @@ async def on_message(message):
                         con.commit()
                     await message.add_reaction(tick)
                 else:
-                    await error(message, "現在不接受分數上報 (上報時間為00, 12, 16, 20的00-10分) <:ln_saki_cry:1008601057380814849>")
+                    await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
                     return
 
         elif now.date() == (bot.end_day + datetime.timedelta(days=1)).date():
@@ -188,7 +188,7 @@ async def on_message(message):
                 update_tracker(start_hrs, rank, pt)
                 await message.add_reaction(tick)
             else:
-                await error(message, "現在不接受分數上報 (上報時間為00, 12, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
+                await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
                 return
 
     await bot.process_commands(message)
@@ -238,10 +238,10 @@ async def reminder():
         if now.minute == 0 and now.hour == 22:  # D1
             await channel.send("<@&1177391192602849390> 請在10分鐘内上報分數 <:ln_saki_excited:1011509870081626162>")
     elif now.date() == bot.end_day.date():  # last day
-        if now.hour in [0, 12, 20] and now.minute == 0:
+        if now.hour in [0, 20] and now.minute == 0:
             await channel.send("<@&1177391192602849390> 請在10分鐘内上報分數 <:ln_saki_excited:1011509870081626162>")
     elif bot.start_day.date() < now.date() < bot.end_day.date():  # middle days
-        if now.minute == 0 and now.hour in [0, 12, 22]:
+        if now.minute == 0 and now.hour in [0, 22]:
             await channel.send("<@&1177391192602849390> 請在10分鐘内上報分數 <:ln_saki_excited:1011509870081626162>")
     else:
         return
@@ -252,7 +252,7 @@ async def track():
     channel = bot.get_channel(1177475155929342023)
     now = datetime.datetime.now() + datetime.timedelta(hours=8)
     # D1: 22 / D2-DL-1: 00, 12, 22 / DL-1: 00, 12, 20
-    if now.hour not in [0, 12, 20, 22] or now.minute != 15:
+    if now.hour not in [0, 20, 22] or now.minute != 15:
         return
     if now.date() > bot.end_day.date():
         return
@@ -260,36 +260,41 @@ async def track():
         return
     if now.date() == bot.end_day.date() and now.hour == 22:
         return
-    if now.date() == bot.start_day.date() and now.hour in [0, 12]:
+    if now.date() == bot.start_day.date() and now.hour == 0:
         return
     start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
     data = cur.execute("SELECT rank, pt FROM tracker WHERE time = ? ORDER BY rank", (start_hrs,)).fetchall()
     x = [i[0] for i in data]
     y = [i[1] for i in data]
     spl = pchip(x, y)
-    pt_500 = round(float(spl(500)))
-    cur.execute("INSERT INTO timept500 VALUES (?, ?, ?)", (bot.event_no, start_hrs, pt_500))
-    con.commit()
-    pt_1000 = round(float(spl(1000)))
-    cur.execute("INSERT INTO timept1000 VALUES (?, ?, ?)", (bot.event_no, start_hrs, pt_1000))
-    con.commit()
+
     await channel.send("**__" + now.strftime("%m/%d %H") + ":00 分數線估算__**")
-    await channel.send("T500: " + str(pt_500))
-    await channel.send("T1000: " + str(pt_1000))
     min_rank = min(x)
     max_rank = max(x)
-    if min_rank > 500:
-        min_rank = 500
-    if max_rank < 1000:
-        max_rank = 1000
-    x2 = np.linspace(min_rank, max_rank, num=1000)
 
+    x2 = np.linspace(min_rank, max_rank, num=1000)
     plt.plot(spl(x2), x2, "k-", linewidth=1)
     plt.plot(y, x, "o", markersize=2.5, mec="darkorchid", mfc="darkorchid")
-    plt.axvline(x=pt_1000, lw=0.8, linestyle="--", c="mediumblue")
-    plt.axhline(y=1000, lw=0.8, linestyle="--", c="mediumblue")
-    plt.axvline(x=pt_500, lw=0.8, linestyle="--", c="red")
-    plt.axhline(y=500, lw=0.8, linestyle="--", c="red")
+
+    if min_rank <= 500:
+        pt_500 = round(float(spl(500)))
+        cur.execute("INSERT INTO timept500 VALUES (?, ?, ?)", (bot.event_no, start_hrs, pt_500))
+        con.commit()
+        await channel.send("T500: " + str(pt_500))
+        plt.axvline(x=pt_500, lw=0.8, linestyle="--", c="red")
+        plt.axhline(y=500, lw=0.8, linestyle="--", c="red")
+    else:
+        await channel.send("數據不足 無法估算T500分數")
+    if max_rank >= 1000:
+        pt_1000 = round(float(spl(1000)))
+        cur.execute("INSERT INTO timept1000 VALUES (?, ?, ?)", (bot.event_no, start_hrs, pt_1000))
+        con.commit()
+        await channel.send("T1000: " + str(pt_1000))
+        plt.axvline(x=pt_1000, lw=0.8, linestyle="--", c="mediumblue")
+        plt.axhline(y=1000, lw=0.8, linestyle="--", c="mediumblue")
+    else:
+        await channel.send("數據不足 無法估算T1000分數")
+
     plt.title(now.strftime("%m/%d %H") + ":00 分數線估算")
     plt.xlabel("Points")
     plt.ylabel("Rank")
@@ -814,9 +819,12 @@ async def end(ctx):
     await bot_channel.send("Insertion into accuracy db completed")
     upload_channel = bot.get_channel(1153702450365210634)
     await upload_channel.send("----- " + str(bot.event_no) + "期分數上報結束 <:ln_saki_otsu:1006480191431909457> -----")
-    reminder.stop()
-    track.stop()
-    predict.stop()
+    if reminder.is_running():
+        reminder.stop()
+    if track.is_running():
+        track.stop()
+    if predict.is_running():
+        predict.stop()
     await bot_channel.send("All loops stopped")
 
 
