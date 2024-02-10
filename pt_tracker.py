@@ -573,24 +573,24 @@ async def start_predict(ctx):
         await ctx.send("Predict loop started at " + now.strftime("%H:%M:%S"))
 
 
-@bot.command(name="end_track", hidden=True)
+@bot.command(name="end_track")
 async def end_track(ctx):
     if track.is_running():
-        track.stop()
+        track.cancel()
         await ctx.send("Track loop stopped")
 
 
-@bot.command(name="end_reminder", hidden=True)
+@bot.command(name="end_reminder")
 async def end_reminder(ctx):
     if reminder.is_running():
-        reminder.stop()
+        reminder.cancel()
         await ctx.send("Reminder loop stopped")
 
 
-@bot.command(name="end_predict", hidden=True)
+@bot.command(name="end_predict")
 async def end_predict(ctx):
     if predict.is_running():
-        predict.stop()
+        predict.cancel()
         await ctx.send("Predict loop stopped")
 
 
@@ -820,11 +820,11 @@ async def end(ctx):
     upload_channel = bot.get_channel(1153702450365210634)
     await upload_channel.send("----- " + str(bot.event_no) + "期分數上報結束 <:ln_saki_otsu:1006480191431909457> -----")
     if reminder.is_running():
-        reminder.stop()
+        reminder.cancel()
     if track.is_running():
-        track.stop()
+        track.cancel()
     if predict.is_running():
-        predict.stop()
+        predict.cancel()
     await bot_channel.send("All loops stopped")
 
 
