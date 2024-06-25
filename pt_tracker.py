@@ -114,7 +114,7 @@ async def on_message(message):
             await message.add_reaction(tick)
             return"""
 
-        if now.date() == bot.start_day.date():  # D1
+        """if now.date() == bot.start_day.date():  # D1
             if 0 <= now.minute <= 10 and now.hour == 22:
                 start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
                 update_tracker(start_hrs, rank, pt)
@@ -132,10 +132,10 @@ async def on_message(message):
                     await message.add_reaction(tick)
                 else:
                     await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
-                    return
+                    return"""
 
-        elif bot.start_day.date() < now.date() < bot.end_day.date():  # middle days
-            if 0 <= now.minute <= 10 and now.hour in [0, 22]:
+        if bot.start_day.date() < now.date() < bot.end_day.date():  # middle days
+            if 0 <= now.minute <= 10 and now.hour == 0:
                 start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
                 update_tracker(start_hrs, rank, pt)
                 await message.add_reaction(tick)
@@ -151,7 +151,7 @@ async def on_message(message):
                         con.commit()
                     await message.add_reaction(tick)
                 else:
-                    await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
+                    await error(message, "現在不接受分數上報 (上報時間為每天00的00-10分) <:ln_saki_cry:1008601057380814849>")
                     return
 
         elif now.date() == bot.end_day.date():
@@ -175,20 +175,21 @@ async def on_message(message):
                         con.commit()
                     await message.add_reaction(tick)
                 else:
-                    await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
+                    await error(message, "現在不接受分數上報 (上報時間為每天00+結活20的00-10分) <:ln_saki_cry:1008601057380814849>")
                     return
 
-        elif now.date() == (bot.end_day + datetime.timedelta(days=1)).date():
+        elif now.date() == (bot.end_day + datetime.timedelta(days=1)).date():  # event ended
             start_hrs = math.floor((bot.end_day - bot.start_day).total_seconds() / (60 * 60))
             update_tracker(start_hrs, rank, pt)
             await message.add_reaction(tick)
-        else:
+
+        else:  # T500 or T1000 score
             if rank in [500, 1000]:
                 start_hrs = (now - bot.start_day).total_seconds() / (60 * 60)
                 update_tracker(start_hrs, rank, pt)
                 await message.add_reaction(tick)
             else:
-                await error(message, "現在不接受分數上報 (上報時間為00, 22的00-10分) <:ln_saki_cry:1008601057380814849>")
+                await error(message, "現在不接受分數上報 (上報時間為每天00的00-10分) <:ln_saki_cry:1008601057380814849>")
                 return
 
     await bot.process_commands(message)
@@ -235,13 +236,13 @@ async def reminder():
             track.start()
             await bot.get_channel(1007203228515057687).send("track loop started")
     # ----- reminders -----
-        if now.minute == 0 and now.hour == 22:  # D1
-            await channel.send("<@&1177391192602849390> 請在10分鐘内上報分數 <:ln_saki_excited:1011509870081626162>")
+        """if now.minute == 0 and now.hour == 22:  # D1
+            await channel.send("<@&1177391192602849390> 請在10分鐘内上報分數 <:ln_saki_excited:1011509870081626162>")"""
     elif now.date() == bot.end_day.date():  # last day
         if now.hour in [0, 20] and now.minute == 0:
             await channel.send("<@&1177391192602849390> 請在10分鐘内上報分數 <:ln_saki_excited:1011509870081626162>")
     elif bot.start_day.date() < now.date() < bot.end_day.date():  # middle days
-        if now.minute == 0 and now.hour in [0, 22]:
+        if now.minute == 0 and now.hour == 0:
             await channel.send("<@&1177391192602849390> 請在10分鐘内上報分數 <:ln_saki_excited:1011509870081626162>")
     else:
         return
@@ -252,14 +253,14 @@ async def track():
     channel = bot.get_channel(1177475155929342023)
     now = datetime.datetime.now() + datetime.timedelta(hours=8)
     # D1: 22 / D2-DL-1: 00, 12, 22 / DL-1: 00, 12, 20
-    if now.hour not in [0, 20, 22] or now.minute != 15:
+    if now.hour not in [0, 20] or now.minute != 15:
         return
     if now.date() > bot.end_day.date():
         return
     if now.date() < bot.end_day.date() and now.hour == 20:
         return
-    if now.date() == bot.end_day.date() and now.hour == 22:
-        return
+    """if now.date() == bot.end_day.date() and now.hour == 22:
+        return"""
     if now.date() == bot.start_day.date() and now.hour == 0:
         return
     start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
@@ -316,12 +317,12 @@ async def predict():
     if (now - bot.start_day).total_seconds() / (60*60) < 33:  # before D3 0000
         return
     if now.date() == bot.end_day.date():
-        if now.hour not in [0, 12, 20]:
+        if now.hour not in [0, 20]:
             return
     elif now.date() > bot.end_day.date():
         return
     else:
-        if now.hour not in [0, 12]:
+        if now.hour != 0:
             return
     channel = bot.get_channel(1177954438326013993)
     start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
@@ -616,7 +617,7 @@ async def saki(ctx):
     embed_all = discord.Embed(title="__Saki指令表__",
                               description="天馬咲希bot由SK所寫\n以下為saki的指令介紹:"
                                           "\n\n**!plot <rank> <start> <end>**\n查看過往活動的分數線"
-                                          "\n(40, 42, 54, 55, 56, 58, 71-76期沒有紀錄)"
+                                          "\n(40, 42, 54, 55, 56, 58, 67期或以後沒有紀錄)"
                                           "\nrank: 500 | 1000"
                                           "\nstart, end: 要查看的第一個和最後一個活動的期數，每次最多只能查20個活動"
                                           "\n\n**!accuracy**\n查看過往活動結活當天20:00分數預測的誤差"
@@ -1072,8 +1073,7 @@ async def test_predict(ctx, time: float):
         total_hrs = (bot.end_day - bot.start_day).total_seconds() / (60 * 60)
         ts = np.arange(1, start_hrs + 1, 4)  # ts (hours from start) = 1, 5, 9, 13, 17, 21...
         ts_subset = ts[2:]  # from hr = 9 (D2 00)
-        prev_eids = cur.execute("SELECT DISTINCT eid FROM timept500").fetchall()
-        prev_eids = [e[0] for e in prev_eids][:-1]
+        prev_eids = [36, 37, 38, 39, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57, 59, 60, 61, 62, 63, 64, 65, 66]
 
         # T500 prediction
         curr_500 = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ?", (bot.event_no,)).fetchall()
