@@ -265,6 +265,10 @@ async def track():
         return
     start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
     data = cur.execute("SELECT rank, pt FROM tracker WHERE time = ? ORDER BY rank", (start_hrs,)).fetchall()
+    if len(data) < 2:
+        await channel.send("**__" + now.strftime("%m/%d %H") + ":00 分數線估算__**")
+        await channel.send("數據不足 無法估算分數")
+        return
     x = [i[0] for i in data]
     y = [i[1] for i in data]
     spl = pchip(x, y)
@@ -329,8 +333,7 @@ async def predict():
     total_hrs = (bot.end_day - bot.start_day).total_seconds() / (60 * 60)
     ts = np.arange(1, start_hrs + 1, 4)  # ts (hours from start) = 1, 5, 9, 13...
     ts_subset = ts[2:]  # from hr = 9
-    prev_eids = cur.execute("SELECT DISTINCT eid FROM timept500").fetchall()
-    prev_eids = [e[0] for e in prev_eids][:-1]
+    prev_eids = [36, 37, 38, 39, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57, 59, 60, 61, 62, 63, 64, 65, 66]
 
     # T500 prediction
     curr_500 = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ?", (bot.event_no,)).fetchall()
