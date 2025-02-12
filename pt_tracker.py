@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from PIL import Image
 import numpy as np
-from scipy.interpolate import pchip
 import sqlite3
+import requests
 from dotenv import load_dotenv
 from get_past_events import past_event
 from get_acc import get_acc
@@ -91,17 +91,11 @@ async def on_ready():
                            "- Event end: " + bot.next_end.strftime("%m/%d %H:%M"))
     else:
         await channel.send("<@598066719659130900> Failed to find current event <:ln_saki_weapon:1006929901745614859>")
-    predict.start()
-    if now.hour < 4:
-        target = datetime.datetime(now.year, now.month, now.day, 4, 0, 0, tzinfo=hktz)
-    else:
-        target = datetime.datetime(now.year, now.month, now.day, 4, 0, 0, tzinfo=hktz) + datetime.timedelta(days=1)
-    seconds = target - now
-    await channel.send("check_event_change starting in " + str(seconds.seconds) + " seconds")
-    await asyncio.sleep(seconds.seconds)
+
     check_event_change.start()
-    now = datetime.datetime.now(hktz)
-    await channel.send("check_event_change started at " + now.strftime("%H:%M:%S"))
+    await channel.send("check_event_change started")
+    predict.start()
+    await channel.send("Predict loop started")
 
 
 @bot.event
@@ -227,45 +221,98 @@ async def on_raw_message_delete(payload):
 
 
 # ----- loops -----
-@tasks.loop(hours=24, reconnect=True)
+@tasks.loop(time=datetime.time(4, 0, 0, tzinfo=hktz), reconnect=True)
 async def check_event_change():  # check every day at 04:00
+    print(f"check event change")
     now = datetime.datetime.now(hktz)
     if bot.next_start - datetime.timedelta(hours=15) <= now < bot.next_start:  # 00:00 <= now < 15:00
         channel = bot.get_channel(1007203228515057687)
-        # calculate accuracy
+        await channel.send(f"Event change activated [{now.strftime('%d/%m %H:%M:%S')}]")
+        # ----- calculate accuracy ----
+        api500 = f"https://api.sekai.best/event/{bot.event_no}/rankings/graph?region=tw&rank=500"
+        res500 = json.loads(requests.get(api500).text)["data"]["eventRankings"][-1]
+        actual500 = res500["score"]
+        actual500_timestamp = res500["timestamp"]
+        await channel.send(f"T500: {actual500}pt at {actual500_timestamp}")
+
+        api1000 = f"https://api.sekai.best/event/{bot.event_no}/rankings/graph?region=tw&rank=1000"
+        res1000 = json.loads(requests.get(api1000).text)["data"]["eventRankings"][-1]
+        actual1000 = res1000["score"]
+        actual1000_timestamp = res1000["timestamp"]
+        await channel.send(f"T1000: {actual1000}pt at {actual1000_timestamp}")
+
+        try:
+            cur.execute("INSERT INTO accuracy VALUES (?, ?, ?, ?, ?, ?, ?)", (bot.event_no,
+                                                                              bot.predict500, actual500,
+                                                                              bot.predict500 - actual500,
+                                                                              bot.predict1000, actual1000,
+                                                                              bot.predict1000 - actual1000))
+            con.commit()
+        except sqlite3.IntegrityError:
+            cur.execute(
+                "UPDATE accuracy SET predict500 = ?,  predict1000 = ? , diff500 = ?, diff1000 = ? WHERE eid = ?",
+                (bot.predict500, bot.predict1000, bot.predict500 - actual500, bot.predict1000 - actual1000,
+                 bot.event_no))
+            con.commit()
+        await channel.send("Insertion into accuracy db completed")
+
+        """
         total_hrs = (bot.end_day - bot.start_day).total_seconds() / (60 * 60)
         end_pt_500 = cur.execute("SELECT * FROM timept500 WHERE eid = ? and time = ?",
                                  (bot.event_no, total_hrs)).fetchone()
         end_pt_1000 = cur.execute("SELECT * FROM timept1000 WHERE eid = ? and time = ?",
                                   (bot.event_no, total_hrs)).fetchone()
-        if not end_pt_500:
-            await channel.send("<@&1006476907367370824>\n"
-                               "沒有結活T500分數記錄，請儘快在<#1296159421704966296>上報 <:ln_saki_otsu:1006480191431909457>")
-        if not end_pt_1000:
-            await channel.send("<@&1006476907367370824>\n"
-                               "沒有結活T500分數記錄，請儘快在<#1296159613921525793>上報 <:ln_saki_otsu:1006480191431909457>")
-        try:
-            cur.execute("INSERT INTO accuracy VALUES (?, ?, ?, ?, ?, ?, ?)", (bot.event_no,
-                                                                              bot.predict500, end_pt_500,
-                                                                              bot.predict500 - end_pt_500,
-                                                                              bot.predict1000, end_pt_1000,
-                                                                              bot.predict1000 - end_pt_1000))
-            con.commit()
-        except sqlite3.IntegrityError:
-            cur.execute(
-                "UPDATE accuracy SET predict500 = ?,  predict1000 = ? , diff500 = ?, diff1000 = ? WHERE eid = ?",
-                (bot.predict500, bot.predict1000, bot.predict500 - end_pt_500, bot.predict1000 - end_pt_1000, bot.event_no))
-            con.commit()
+        if end_pt_500 and end_pt_1000:
+            end_pt_500 = end_pt_500[0]
+            end_pt_1000 = end_pt_1000[0]
+            try:
+                cur.execute("INSERT INTO accuracy VALUES (?, ?, ?, ?, ?, ?, ?)", (bot.event_no,
+                                                                                  bot.predict500, actual500,
+                                                                                  bot.predict500 - actual500,
+                                                                                  bot.predict1000, end_pt_1000,
+                                                                                  bot.predict1000 - end_pt_1000))
+                con.commit()
+            except sqlite3.IntegrityError:
+                cur.execute(
+                    "UPDATE accuracy SET predict500 = ?,  predict1000 = ? , diff500 = ?, diff1000 = ? WHERE eid = ?",
+                    (bot.predict500, bot.predict1000, bot.predict500 - end_pt_500, bot.predict1000 - end_pt_1000,
+                     bot.event_no))
+                con.commit()
+            await channel.send("Insertion into accuracy db completed")
 
-        await channel.send("Insertion into accuracy db completed")
+        elif not end_pt_500:
+            await channel.send("<@598066719659130900>\n"
+                               "沒有結活T500分數記錄，請儘快在<#1296159421704966296>上報 <:ln_saki_otsu:1006480191431909457>")
+
+        if not end_pt_1000:
+            await channel.send("<@598066719659130900>\n"
+                               "沒有結活T1000分數記錄，請儘快在<#1296159613921525793>上報 <:ln_saki_otsu:1006480191431909457>")
+
         upload_channel = bot.get_channel(1296159421704966296)
         await upload_channel.send(
             "----- " + str(bot.event_no) + "期分數上報結束 <:ln_saki_otsu:1006480191431909457> -----")
         upload_channel = bot.get_channel(1296159613921525793)
         await upload_channel.send(
             "----- " + str(bot.event_no) + "期分數上報結束 <:ln_saki_otsu:1006480191431909457> -----")
+        """
 
-        # change to next event
+        # ----- insert current event graph to db -----
+        data500 = past_event(bot.event_no, 500)
+        data1000 = past_event(bot.event_no, 1000)
+        for i in data500:
+            try:
+                cur.execute("INSERT INTO timept500 VALUES (?, ?, ?)", (bot.event_no, i[0], i[1]))
+                con.commit()
+            except sqlite3.IntegrityError:
+                continue
+        for j in data1000:
+            try:
+                cur.execute("INSERT INTO timept1000 VALUES (?, ?, ?)", (bot.event_no, j[0], j[1]))
+                con.commit()
+            except sqlite3.IntegrityError:
+                continue
+
+        # ----- change to next event -----
         bot.event_no = bot.next_event
         bot.start_day = bot.next_start
         bot.end_day = bot.next_end
@@ -279,47 +326,125 @@ async def check_event_change():  # check every day at 04:00
         cur.execute("INSERT INTO timept1000 VALUES (?, ?, ?)", (bot.event_no, 0, 0))
         con.commit()
         await channel.send("Event change <:ln_saki_excited:1011509870081626162>\n"
-                           f"Current event: {bot.event_no}\n" +
-                           "Event start: " + bot.start_day.strftime("%m/%d %H:%M") + "\n" +
-                           "Event end: " + bot.end_day.strftime("%m/%d %H:%M"))
+                           f"Current event: {bot.event_no}\n"
+                           f"- Event start: {bot.start_day.strftime('%m/%d %H:%M')}\n"
+                           f"- Event end: {bot.end_day.strftime('%m/%d %H:%M')}\n"
+                           f"Next event: {bot.next_event}\n" +
+                           "- Event start: " + bot.next_start.strftime("%m/%d %H:%M") + "\n" +
+                           "- Event end: " + bot.next_end.strftime("%m/%d %H:%M"))
+        predict.restart()
+        await channel.send("Predict loop restarted")
+
+
+@bot.command(hidden=True)
+async def change_event(ctx):
+    print(f"Event change manually called")
+    now = datetime.datetime.now(hktz)
+    channel = bot.get_channel(1007203228515057687)
+    await channel.send(f"Event change activated [{now.strftime('%d/%m %H:%M:%S')}]")
+    # calculate accuracy
+    total_hrs = (bot.end_day - bot.start_day).total_seconds() / (60 * 60)
+    end_pt_500 = cur.execute("SELECT * FROM timept500 WHERE eid = ? and time = ?",
+                             (bot.event_no, total_hrs)).fetchone()
+    end_pt_1000 = cur.execute("SELECT * FROM timept1000 WHERE eid = ? and time = ?",
+                              (bot.event_no, total_hrs)).fetchone()
+    if end_pt_500 and end_pt_1000:
+        end_pt_500 = end_pt_500[2]
+        end_pt_1000 = end_pt_1000[2]
+        try:
+            cur.execute("INSERT INTO accuracy VALUES (?, ?, ?, ?, ?, ?, ?)", (bot.event_no,
+                                                                              bot.predict500, end_pt_500,
+                                                                              bot.predict500 - end_pt_500,
+                                                                              bot.predict1000, end_pt_1000,
+                                                                              bot.predict1000 - end_pt_1000))
+            con.commit()
+        except sqlite3.IntegrityError:
+            pass
+        await channel.send("Insertion into accuracy db completed")
+
+    elif not end_pt_500:
+        await channel.send("<@598066719659130900>\n"
+                           "沒有結活T500分數記錄，請儘快在<#1296159421704966296>上報 <:ln_saki_otsu:1006480191431909457>")
+
+    if not end_pt_1000:
+        await channel.send("<@598066719659130900>\n"
+                           "沒有結活T1000分數記錄，請儘快在<#1296159613921525793>上報 <:ln_saki_otsu:1006480191431909457>")
+
+    upload_channel = bot.get_channel(1296159421704966296)
+    await upload_channel.send(
+        "----- " + str(bot.event_no) + "期分數上報結束 <:ln_saki_otsu:1006480191431909457> -----")
+    upload_channel = bot.get_channel(1296159613921525793)
+    await upload_channel.send(
+        "----- " + str(bot.event_no) + "期分數上報結束 <:ln_saki_otsu:1006480191431909457> -----")
+
+    # change to next event
+    bot.event_no = bot.next_event
+    bot.start_day = bot.next_start
+    bot.end_day = bot.next_end
+    bot.next_event += 1
+    response = urllib.request.urlopen("https://sekai-world.github.io/sekai-master-db-tc-diff/events.json")
+    events = json.loads(response.read())
+    next_event = [e for e in events if e["id"] == bot.next_event][0]
+    bot.next_start = datetime.datetime.fromtimestamp(next_event["startAt"]/1000, hktz)
+    bot.next_end = datetime.datetime.fromtimestamp(next_event["aggregateAt"]/1000+1, hktz)
+    try:
+        cur.execute("INSERT INTO timept500 VALUES (?, ?, ?)", (bot.event_no, 0, 0))
+        cur.execute("INSERT INTO timept1000 VALUES (?, ?, ?)", (bot.event_no, 0, 0))
+        con.commit()
+    except sqlite3.IntegrityError:
+        pass
+    await channel.send("Event change <:ln_saki_excited:1011509870081626162>\n"
+                       f"Current event: {bot.event_no}\n"
+                       f"- Event start: {bot.start_day.strftime('%m/%d %H:%M')}\n"
+                       f"- Event end: {bot.end_day.strftime('%m/%d %H:%M')}\n"
+                       f"Next event: {bot.next_event}\n" +
+                       "- Event start: " + bot.next_start.strftime("%m/%d %H:%M") + "\n" +
+                       "- Event end: " + bot.next_end.strftime("%m/%d %H:%M"))
 
 
 def calc_mape(prev, curr):
     return np.mean(np.abs((prev - curr) / prev))
 
 
-@tasks.loop(hours=1, reconnect=True)
+@tasks.loop(time=[datetime.time(0, 0, 45, tzinfo=hktz), datetime.time(16, 0, 45, tzinfo=hktz),
+                  datetime.time(19, 0, 45, tzinfo=hktz), datetime.time(20, 0, 45, tzinfo=hktz)], reconnect=True)
 async def predict():
     now = datetime.datetime.now(hktz)
-    if now.minute != 0:
-        seconds = (60 - now.minute - 1) * 60 + (60 - now.second)
-        channel = bot.get_channel(1007203228515057687)
-        await channel.send("Predict starting in " + str(seconds) + " seconds")
-        await asyncio.sleep(seconds)
-        now = datetime.datetime.now(hktz)
-        await channel.send("Predict loop started at " + now.strftime("%H:%M:%S"))
+    print("predict task run")
+    if bot.end_day.hour == 21:  # normal event (X world link)
+        if now.hour == 19:
+            return
+        if now < bot.start_day + datetime.timedelta(days=1, hours=8, minutes=59):  # before D3 0000 (< D2 2359)
+            return
+        if now.date() != bot.end_day.date():
+            if now.hour == 20:
+                return
+        if now.date() > bot.end_day.date():
+            return
+    else:  # world link (ends 20:00)
+        if now.hour == 20:
+            return
+        if now < bot.start_day + datetime.timedelta(days=1, hours=8, minutes=59):  # before D3 0000 (< D2 2359)
+            return
+        if now.date() != bot.end_day.date():
+            if now.hour == 19:
+                return
+        if now.date() > bot.end_day.date():
+            return
 
-    if (now - bot.start_day).total_seconds() / (60*60) < 33:  # before D3 0000
-        return
-    if now.date() == bot.end_day.date():
-        if now.hour not in [0, 20]:
-            return
-    elif now.date() > bot.end_day.date():
-        return
-    else:
-        if now.hour != 0:
-            return
-    channel = bot.get_channel(1177954438326013993)
     start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
     total_hrs = (bot.end_day - bot.start_day).total_seconds() / (60 * 60)
-    prev_eids = [36, 37, 38, 39, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57, 59, 60, 61, 62, 63, 64, 65, 66]
+    prev_eids = cur.execute("SELECT distinct eid FROM timept500").fetchall()
+    prev_eids = [int(i[0]) for i in prev_eids]
+    # prev_eids = [36, 37, 38, 39, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57, 59, 60, 61, 62, 63, 64, 65, 66]
 
-    # T500 prediction
-    curr_500 = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ?", (bot.event_no,)).fetchall()
+    # ----- T500 prediction -----
+    curr_500 = list(past_event(bot.event_no, 500))
+    # (old) curr_500 = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ?", (bot.event_no,)).fetchall()
     curr_500_x = [i[0] for i in curr_500]
     curr_500_y = [i[1] for i in curr_500]
     last_500_x = curr_500_x[-1]
-    ts = np.arange(1, last_500_x + 1, 4)  # hrs 1, 5, 9... to last value before last_x
+    ts = np.arange(1, math.floor(last_500_x)+1, 4)  # hrs 1, 5, 9... 61 (eg.last_x=64.5), arange: [1,floor.last_x+1)
     ts_subset = ts[2:]  # from hr = 9
     curr_500_interp = np.interp(ts, curr_500_x, curr_500_y)  # get values at each timestep in ts
     mapes = []
@@ -388,29 +513,35 @@ async def predict():
             ci += 1
         else:
             continue
-    ax.plot(curr_500_x, curr_500_y, label="Current", linewidth=1, color="r", marker=".")
+    ax.plot(curr_500_x, curr_500_y, label="Current", linewidth=1.2, color="r")
     ax.plot(predict_500_x, predict_500_y, label="Prediction", linewidth=1.25, color="r", ls="--")
     ax.legend(title="Event", alignment="left", labelspacing=0.2, fontsize="x-small", title_fontsize="small", loc=2)
     ax.set_title("T500 分數線預測")
-    ax.set_xlabel("Time (hrs since start, Dday at 00)")
+    ax.set_xlabel("Time (hrs since start, grey=00:00)")
     ax.set_ylabel("Points")
     ax.set_xlim(left=0)
     ax.set_ylim(bottom=0)
     fig.savefig("predict500.png", dpi=600, bbox_inches='tight', pad_inches=0.25)
-    await channel.send("**__" + now.strftime("%m/%d %H") + ":00 結活分數預測__**")
+    channel = bot.get_channel(1177954438326013993)
+    await channel.send("**__" + now.strftime("%m/%d %H:%M") + " 結活分數預測__**")
     await channel.send("T500: " + str(int(round(final_pt))))
     await channel.send(file=discord.File('predict500.png'))
-    if now.date() == bot.end_day.date() and now.hour == 20:
-        bot.predict500 = int(round(final_pt))
+    if bot.end_day.hour == 21:
+        if now.date() == bot.end_day.date() and now.hour == 20:
+            bot.predict500 = int(round(final_pt))
+    else:  # world link: ends at 20:00
+        if now.date() == bot.end_day.date() and now.hour == 20:
+            bot.predict500 = int(round(final_pt))
     plt.clf()
     plt.close("all")
 
-    # T1000 prediction
-    curr_1000 = cur.execute("SELECT time, pt FROM timept1000 WHERE eid = ?", (bot.event_no,)).fetchall()
+    # ----- T1000 prediction -----
+    curr_1000 = list(past_event(bot.event_no, 1000))
+    # curr_1000 = cur.execute("SELECT time, pt FROM timept1000 WHERE eid = ?", (bot.event_no,)).fetchall()
     curr_1000_x = [i[0] for i in curr_1000]
     curr_1000_y = [i[1] for i in curr_1000]
     last_1000_x = curr_1000_x[-1]
-    ts = np.arange(1, last_1000_x + 1, 4)
+    ts = np.arange(1, math.floor(last_1000_x)+1, 4)
     ts_subset = ts[2:]
     curr_1000_interp = np.interp(ts, curr_1000_x, curr_1000_y)
     mapes = []
@@ -475,16 +606,17 @@ async def predict():
             ci += 1
         else:
             continue
-    ax.plot(curr_1000_x, curr_1000_y, label="Current", linewidth=1, color="r", marker=".")
+    ax.plot(curr_1000_x, curr_1000_y, label="Current", linewidth=1.2, color="r")
     ax.plot(predict_1000_x, predict_1000_y, label="Prediction", linewidth=1.25, color="r", ls="--")
     ax.legend(title="Event", alignment="left", labelspacing=0.2, fontsize="x-small", title_fontsize="small", loc=2)
     ax.set_title("T1000 分數線預測")
-    ax.set_xlabel("Time (hrs since start, Dday at 00)")
+    ax.set_xlabel("Time (hrs since start, grey=00:00)p")
     ax.set_ylabel("Points")
     ax.set_xlim(left=0)
     ax.set_ylim(bottom=0)
     fig.savefig("predict1000.png", dpi=600, bbox_inches='tight', pad_inches=0.25)
-    await channel.send("T1000: " + str(int(round(final_pt))))
+    # {D{(last_1000_x-9)//23.9999999 + 1}) (bot.start_day + datetime.timedelta(hours=last_1000_x)).strftime('%H:%M')}")
+    await channel.send(f"T1000: {int(round(final_pt))}")
     await channel.send(file=discord.File('predict1000.png'))
     if now.date() == bot.end_day.date() and now.hour == 20:
         bot.predict1000 = int(round(final_pt))
@@ -544,65 +676,102 @@ async def check_loops(ctx):
         await ctx.send("Predictor loop running")
     else:
         await ctx.send("Predictor loop stopped")
+    if check_event_change.is_running():
+        await ctx.send("Check event change loop running")
+    else:
+        await ctx.send("Check event change loop stopped")
 
 
 # ----- commands -----
 @bot.command(name='saki')
-async def saki(ctx):
-    embed_all = discord.Embed(title="__Saki指令表__",
-                              description="天馬咲希bot由SK所寫\n以下為saki的指令介紹:"
-                                          "\n\n**!plot <rank> <start> <end>**\n查看過往活動的分數線"
-                                          "\n(40, 42, 54, 55, 56, 58, 67期或以後沒有紀錄)"
-                                          "\nrank: 500 | 1000"
-                                          "\nstart, end: 要查看的第一個和最後一個活動的期數，每次最多只能查20個活動"
-                                          "\n\n**!accuracy**\n查看過往活動結活當天20:00分數預測的誤差"
-                                          "\n\n**!saki**\n顯示此指令表"
-                                          "\n** **",
-                              colour=0xFFDD45)
-    embed_all.set_footer(text="最後更新: 30/11/2023")
+async def saki(ctx, mod=None):
+    if mod == "mod":
+        embed_all = discord.Embed(title="__Saki指令表(mod)__",
+                                  description="天馬咲希bot由SK所寫\n以下為saki的指令介紹:"
+                                              "\n\n**!start_predict, !end_predict**"
+                                              "\nStart and end predict loop manually"
+                                              "\n\n**!check_loops**"
+                                              "\nCheck loops status"
+                                              "\n\n**!change_event**"
+                                              "\nStart change event manually"
+                                              "\n\n**!test_predict**"
+                                              "\nManually call predict task then send T500 and T1000 predictions"
+                                              "\n\n**!q <query>**"
+                                              "\nExecute query"
+                                              "\n\n----- fix databases -----"
+                                              "\n**!create**"
+                                              "\nCreate dbs:"
+                                              "\n- timept500/1000(eid, time, pt)"
+                                              "\n- accuracy(eid, predict500, actual500, diff500, "
+                                              "predict1000, actual1000, diff1000)"
+                                              "\n\n**!insert_past_events <start> <end>**"
+                                              "\nInsert past event pts into dbs timept500/1000"
+                                              "\n\n**!insert_0**"
+                                              "\nAdd (time,pt)=(0,0) to all events in timept500/1000"
+                                              "\n\n**!fix_data**"
+                                              "\nAdd synthetic pt data for missing values in timept500/1000"
+                                              "\n** **",
+                                  colour=0xFFDD45)
+        embed_all.set_footer(text="最後更新: 13/02/2025")
+    else:
+        embed_all = discord.Embed(title="__Saki指令表__",
+                                  description="天馬咲希bot由SK所寫\n以下為saki的指令介紹:"
+                                              "\n\n**!plot <rank> <*events>**\n查看當期和指定過往活動的分數線，每次最多可查20個活動"
+                                              "\n(40, 42, 54, 55, 56, 58, 67-116期沒有紀錄)"
+                                              "\nrank: 500 | 1000"
+                                              "\n例: !plot 500 36 37 59"
+                                              "\n\n**!accuracy**\n查看過往活動結活當天20:00分數預測的誤差"
+                                              "\n\n**!saki**\n顯示此指令表"
+                                              "\n** **",
+                                  colour=0xFFDD45)
+        embed_all.set_footer(text="最後更新: 03/01/2025")
     await ctx.send(embed=embed_all)
 
 
 @bot.command(name="plot")
-async def plot(ctx, rank: int, event_start: int, event_end: int):
+async def plot(ctx, rank: int, *events):
     if rank not in [500, 1000]:
         await ctx.send("查詢排名必須 = 500 | 1000 <:ln_saki_cry:1008601057380814849>")
         return
-    if event_end - event_start + 1 > 20:
+    eids = [int(i) for i in events]
+    if len(eids) > 20:
         await ctx.send("每次最多只能查20個活動 <:ln_saki_weapon:1006929901745614859>")
         return
+    past_eids = cur.execute("SELECT DISTINCT eid from timept500").fetchall()
+    eids = [i for i in eids if i in [j[0] for j in past_eids]]
+
     async with ctx.typing():
-        colours = plt.get_cmap("tab20")
-        colours = colours(np.linspace(0, 1, event_end - event_start + 1))
         fig, ax = plt.subplots()
         ax.grid(which='minor', linestyle=':', linewidth=0.4, color='#dbdbdb', axis="y")
         ax.grid(which='major', linestyle='-', linewidth=0.45, color='#dbdbdb', axis="y")
         ax.yaxis.set_minor_locator(AutoMinorLocator(4))
         for x in [9, 33, 57, 81, 105, 129, 153, 177, 201, 225, 249]:
             ax.axvline(x, color='#b8b8b8', linewidth=0.75, linestyle='-')
+
+        colours = plt.get_cmap("tab20")
+        colours = colours(np.linspace(0, 1, len(eids)))
         ci = 0
-        for i in range(event_start, event_end + 1):
+        for eid in eids:
             if rank == 500:
-                ts = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ? ORDER BY time", (i, )).fetchall()
+                ts = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ? ORDER BY time", (eid,)).fetchall()
             else:
-                ts = cur.execute("SELECT time, pt FROM timept1000 WHERE eid = ? ORDER BY time", (i,)).fetchall()
+                ts = cur.execute("SELECT time, pt FROM timept1000 WHERE eid = ? ORDER BY time", (eid,)).fetchall()
             if ts:
                 x = [r[0] for r in ts]
                 y = [r[1] for r in ts]
-                ax.plot(x, y, label=str(i), linewidth=1, color=colours[ci])
+                ax.plot(x, y, label=str(eid), linewidth=1, color=colours[ci])
                 ci += 1
             else:
                 continue
-        if rank == 500:
-            ts = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ? ORDER BY time", (bot.event_no,)).fetchall()
-        else:
-            ts = cur.execute("SELECT time, pt FROM timept1000 WHERE eid = ? ORDER BY time", (bot.event_no,)).fetchall()
-        x = [r[0] for r in ts]
-        y = [r[1] for r in ts]
-        ax.plot(x, y, label="Current", linewidth=1, color="r", marker=".")
+
+        curr = list(past_event(bot.event_no, rank))
+        curr_x = [i[0] for i in curr]
+        curr_y = [i[1] for i in curr]
+        ax.plot(curr_x, curr_y, label="Current", linewidth=1, color="r")
+
         ax.set_title("T" + str(rank) + " 分數線")
         ax.legend(title="Event", alignment="left", labelspacing=0.2, fontsize="x-small", title_fontsize="small", loc=2)
-        ax.set_xlabel("Time (hrs since start, Dday at 00)")
+        ax.set_xlabel("Time (hrs since start, grey=00:00)")
         ax.set_ylabel("Points")
         ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
@@ -656,13 +825,13 @@ async def accuracy(ctx):
 
 @bot.command(name="create", hidden=True)
 async def create(ctx):
-    """
     cur.execute("CREATE TABLE timept500(eid, time, pt, "
                 "PRIMARY KEY(eid, time)"
                 ")")
     cur.execute("CREATE TABLE timept1000(eid, time, pt, "
                 "PRIMARY KEY(eid, time)"
                 ")")
+    """
     cur.execute("CREATE TABLE tracker(time, rank, pt, "
                 "PRIMARY KEY(time, rank)"
                 ")")
@@ -687,19 +856,21 @@ async def q(ctx, *, sql):
 
 
 @bot.command(name="insert_past_events", hidden=True)
-async def insert_past_events(ctx):
+async def insert_past_events(ctx, start: int, end: int):
     async with ctx.typing():
         for rank in [500, 1000]:
-            event = 67
-            while event < 71:
-                if event in [40, 42, 54, 55, 56, 58]:
+            print(f"----- T{rank} -----")
+            # event = 36
+            event = start
+            while event <= end:  # while event < 71
+                if event in [40, 42, 54, 55, 56, 58] or 67 <= event <= 116:
                     event += 1
                     continue
                 else:
+                    print(f"inserting event {event}")
                     data = past_event(event, rank)
                     for i in data:
                         try:
-                            print(i[0], i[1])
                             if rank == 500:
                                 cur.execute("INSERT INTO timept500 VALUES (?, ?, ?)", (event, i[0], i[1]))
                             else:
@@ -758,24 +929,29 @@ async def fix_data(ctx):
 
 # ----- test loops -----
 @bot.command(name="test_predict", hidden=True)
-async def test_predict(ctx, time: float):
+async def test_predict(ctx):
     def calc_mape(prev, curr):
         return np.mean(np.abs((prev - curr) / prev))
 
     async with ctx.typing():
-        now = bot.start_day + datetime.timedelta(hours=time)
-        # now = datetime.datetime.strptime("2023/11/25 20:00:00", "%Y/%m/%d %H:%M:%S")
-        start_hrs = time
+        now = datetime.datetime.now(hktz)
+        start_hrs = math.floor((now - bot.start_day).total_seconds() / (60 * 60))
         total_hrs = (bot.end_day - bot.start_day).total_seconds() / (60 * 60)
-        ts = np.arange(1, start_hrs + 1, 4)  # ts (hours from start) = 1, 5, 9, 13, 17, 21...
-        ts_subset = ts[2:]  # from hr = 9 (D2 00)
-        prev_eids = [36, 37, 38, 39, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57, 59, 60, 61, 62, 63, 64, 65, 66]
+        prev_eids = cur.execute("SELECT distinct eid FROM timept500").fetchall()
+        prev_eids = [int(i[0]) for i in prev_eids]
+        # prev_eids = [36, 37, 38, 39, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57, 59, 60, 61, 62, 63, 64, 65, 66]
 
-        # T500 prediction
-        curr_500 = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ?", (bot.event_no,)).fetchall()
+        # ----- T500 prediction -----
+        curr_500 = list(past_event(bot.event_no, 500))
+        # curr_500 = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ?", (bot.event_no,)).fetchall()
         curr_500_x = [i[0] for i in curr_500]
         curr_500_y = [i[1] for i in curr_500]
-        curr_500_interp = np.interp(ts, curr_500_x, curr_500_y)
+        last_500_x = curr_500_x[-1]
+        ts = np.arange(1, math.floor(last_500_x) + 1, 4)  # hrs 1, 5, 9... to last value before last_x
+        if last_500_x != ts[-1]:
+            ts = np.append(ts, last_500_x)
+        ts_subset = ts[2:]  # from hr = 9
+        curr_500_interp = np.interp(ts, curr_500_x, curr_500_y)  # get values at each timestep in ts
         mapes = []
         for e in prev_eids:
             prev_500 = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ?", (e,)).fetchall()
@@ -787,10 +963,10 @@ async def test_predict(ctx, time: float):
         event_mapes = zip(prev_eids, mapes)
         event_mapes = [[i[0], i[1]] for i in event_mapes]
         event_mapes = sorted(event_mapes, key=lambda x: x[1])
-        ms_event = event_mapes[0][0]
-        s_events = [event_mapes[0][0], event_mapes[1][0], event_mapes[2][0]]
-        print(ms_event)
-        acc = get_acc(ms_event, 500)
+        ms_event = event_mapes[0][0]  # most similar event
+        s_events = [event_mapes[0][0], event_mapes[1][0], event_mapes[2][0]]  # most similar 3 events
+        acc = get_acc(ms_event,
+                      500)  # accumulation change time and magnitude [[acc_time], [acc_score]] during final rush
         if acc == KeyError:
             print("most similar error - trying 2nd most similar")
             print(s_events[1])
@@ -799,18 +975,14 @@ async def test_predict(ctx, time: float):
                 print("2nd similar error - trying 3rd most similar")
                 print(s_events[2])
                 acc = get_acc(s_events[2], 500)
-        acc = [[total_hrs - i[0], i[1]] for i in acc]  # [[hr from start, pt increase to next acc], ... [hr, pt increase to final]]
+        acc = [[total_hrs - i[0], i[1]] for i in
+               acc]  # [[hr from start, pt increase to next acc], ... [hr, pt increase to final]]
         # ----- extrapolate -----
         acc_hr = acc[0][0]  # first acc time, hours from start
         curr_500_subset = curr_500_interp[2:]  # pt at hr = 9 to now
-        extrap_500 = np.poly1d(np.polyfit(ts_subset, curr_500_subset, 1))
+        extrap_500 = np.poly1d(
+            np.polyfit(ts_subset, curr_500_subset, 1))  # extrapolate from hr 9 (D1 speed often faster)
         acc_pt = extrap_500(acc_hr).item()
-        """# ----- extrapolate -----
-                acc_hr = acc[0][0]  # first acc time, hours from start
-                curr_500_subset = curr_500_interp[5:]  # pt at hr = 21 to now
-                extrap_500 = np.poly1d(np.polyfit(ts_subset, curr_500_subset, 1))
-                if curr_500_y[-1] < acc_hr:
-                    acc_pt = extrap_500(acc_hr).item()"""
         # ----- add acc data -----
         extrap_500_x = [acc_hr]
         extrap_500_y = [acc_pt]
@@ -818,60 +990,65 @@ async def test_predict(ctx, time: float):
         final_pt = 0
         for i in range(len(acc)):
             if i != len(acc) - 1:
-                extrap_500_x.append(acc[i+1][0])
+                extrap_500_x.append(acc[i + 1][0])
                 extrap_500_y.append(last_pt + acc[i][1])
                 last_pt += acc[i][1]
             else:
                 extrap_500_x.append(total_hrs)
                 final_pt = last_pt + acc[i][1]
                 extrap_500_y.append(final_pt)
-        if time <= total_hrs - 15:
+        if start_hrs <= total_hrs - 8:
             predict_500_x = [curr_500_x[-1]] + extrap_500_x
             predict_500_y = [curr_500_y[-1]] + extrap_500_y
         else:
             predict_500_x = extrap_500_x
             predict_500_y = extrap_500_y
-        if time == total_hrs - 1:
-            bot.predict500 = final_pt
-        # ----- plot (current + prediction + most similar + 2 others) -----
-        async with ctx.typing():
-            colours = ["darkblue", "royalblue", "lightskyblue"]
-            fig, ax = plt.subplots()
-            ax.grid(which='minor', linestyle=':', linewidth=0.4, color='#dbdbdb', axis="y")
-            ax.grid(which='major', linestyle='-', linewidth=0.45, color='#dbdbdb', axis="y")
-            ax.yaxis.set_minor_locator(AutoMinorLocator(4))
-            for x in [9, 33, 57, 81, 105, 129, 153, 177, 201, 225, 249]:
-                ax.axvline(x, color='#b8b8b8', linewidth=0.75, linestyle='-')
-            ci = 0
-            for i in s_events:
-                timept = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ? ORDER BY time", (i, )).fetchall()
-                if timept:
-                    x = [r[0] for r in timept]
-                    y = [r[1] for r in timept]
-                    ax.plot(x, y, label=str(i), linewidth=1, color=colours[ci])
-                    ci += 1
-                else:
-                    continue
-            ax.plot(curr_500_x, curr_500_y, label="Current", linewidth=1, color="r", marker=".")
-            ax.plot(predict_500_x, predict_500_y, label="Prediction", linewidth=1.25, color="r", ls="--")
-            ax.legend(title="Event", alignment="left", labelspacing=0.2, fontsize="x-small", title_fontsize="small", loc=2)
-            ax.set_title("T500 分數線預測")
-            ax.set_xlabel("Time (hrs since start, Dday at 00)")
-            ax.set_ylabel("Points")
-            ax.set_xlim(left=0)
-            ax.set_ylim(bottom=0)
-            fig.savefig("predict500.png", dpi=600, bbox_inches='tight', pad_inches=0.25)
-    await ctx.send("**__" + now.strftime("%m/%d %H") + ":00 結活分數預測__**")
-    await ctx.send("T500: " + str(int(round(final_pt))))
-    await ctx.send(file=discord.File('predict500.png'))
-    plt.clf()
-    plt.close("all")
 
-    async with ctx.typing():
-        # T1000 prediction
-        curr_1000 = cur.execute("SELECT time, pt FROM timept1000 WHERE eid = ?", (bot.event_no,)).fetchall()
+        # ----- plot (current + prediction + most similar + 2 others) -----
+        colours = ["darkblue", "royalblue", "lightskyblue"]
+        fig, ax = plt.subplots()
+        ax.grid(which='minor', linestyle=':', linewidth=0.4, color='#dbdbdb', axis="y")
+        ax.grid(which='major', linestyle='-', linewidth=0.45, color='#dbdbdb', axis="y")
+        ax.yaxis.set_minor_locator(AutoMinorLocator(4))
+        for x in [9, 33, 57, 81, 105, 129, 153, 177, 201, 225, 249]:
+            ax.axvline(x, color='#b8b8b8', linewidth=0.75, linestyle='-')
+        ci = 0
+        for i in s_events:
+            timept = cur.execute("SELECT time, pt FROM timept500 WHERE eid = ? ORDER BY time", (i,)).fetchall()
+            if timept:
+                x = [r[0] for r in timept]
+                y = [r[1] for r in timept]
+                ax.plot(x, y, label=str(i), linewidth=1, color=colours[ci])
+                ci += 1
+            else:
+                continue
+        ax.plot(curr_500_x, curr_500_y, label="Current", linewidth=1.2, color="r")
+        ax.plot(predict_500_x, predict_500_y, label="Prediction", linewidth=1.25, color="r", ls="--")
+        ax.legend(title="Event", alignment="left", labelspacing=0.2, fontsize="x-small", title_fontsize="small", loc=2)
+        ax.set_title("T500 分數線預測")
+        ax.set_xlabel("Time (hrs since start, Dday at 00)")
+        ax.set_ylabel("Points")
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
+        fig.savefig("predict500.png", dpi=600, bbox_inches='tight', pad_inches=0.25)
+        await ctx.send("**__" + now.strftime("%m/%d %H:%M") + " 結活分數預測__**")
+        await ctx.send("T500: " + str(int(round(final_pt))))
+        await ctx.send(file=discord.File('predict500.png'))
+        if now.date() == bot.end_day.date() and now.hour == 20:
+            bot.predict500 = int(round(final_pt))
+        plt.clf()
+        plt.close("all")
+
+        curr_1000 = list(past_event(bot.event_no, 1000))
+        # curr_1000 = cur.execute("SELECT time, pt FROM timept1000 WHERE eid = ?", (bot.event_no,)).fetchall()
         curr_1000_x = [i[0] for i in curr_1000]
         curr_1000_y = [i[1] for i in curr_1000]
+        last_1000_x = curr_1000_x[-1]
+        ts = np.arange(1, math.floor(last_1000_x) + 1, 4)
+        if last_1000_x != ts[-1]:
+            ts = np.append(ts, last_1000_x)
+        print(ts)
+        ts_subset = ts[2:]
         curr_1000_interp = np.interp(ts, curr_1000_x, curr_1000_y)
         mapes = []
         for e in prev_eids:
@@ -898,7 +1075,7 @@ async def test_predict(ctx, time: float):
         acc = [[total_hrs - i[0], i[1]] for i in acc]
         # ----- extrapolate -----
         acc_hr = acc[0][0]  # first acc time, hours from start
-        curr_1000_subset = curr_1000_interp[2:]  # pt at hr = 21 to now
+        curr_1000_subset = curr_1000_interp[2:]  # pt at hr = 9 to now
         extrap_1000 = np.poly1d(np.polyfit(ts_subset, curr_1000_subset, 1))
         acc_pt = extrap_1000(acc_hr).item()
         # ----- add acc data -----
@@ -917,8 +1094,6 @@ async def test_predict(ctx, time: float):
                 extrap_1000_y.append(final_pt)
         predict_1000_x = [curr_1000_x[-1]] + extrap_1000_x
         predict_1000_y = [curr_1000_y[-1]] + extrap_1000_y
-        if time == total_hrs - 1:
-            bot.predict1000 = final_pt
         # ----- plot (current + prediction + most similar + 2 others) -----
         colours = ["darkblue", "royalblue", "lightskyblue"]
         fig, ax = plt.subplots()
@@ -937,7 +1112,7 @@ async def test_predict(ctx, time: float):
                 ci += 1
             else:
                 continue
-        ax.plot(curr_1000_x, curr_1000_y, label="Current", linewidth=1, color="r", marker=".")
+        ax.plot(curr_1000_x, curr_1000_y, label="Current", linewidth=1.2, color="r")
         ax.plot(predict_1000_x, predict_1000_y, label="Prediction", linewidth=1.25, color="r", ls="--")
         ax.legend(title="Event", alignment="left", labelspacing=0.2, fontsize="x-small", title_fontsize="small", loc=2)
         ax.set_title("T1000 分數線預測")
@@ -946,19 +1121,20 @@ async def test_predict(ctx, time: float):
         ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
         fig.savefig("predict1000.png", dpi=600, bbox_inches='tight', pad_inches=0.25)
-    await ctx.send("T1000: " + str(int(round(final_pt))))
-    await ctx.send(file=discord.File('predict1000.png'))
-    plt.clf()
-    plt.close("all")
+        await ctx.send("T1000: " + str(int(round(final_pt))))
+        await ctx.send(file=discord.File('predict1000.png'))
+        if now.date() == bot.end_day.date() and now.hour == 20:
+            bot.predict1000 = int(round(final_pt))
+        plt.clf()
+        plt.close("all")
 
 
 @bot.command(hidden=True)
-async def test(ctx):
-    now = datetime.datetime.strptime("2023/11/23 00:00:00", "%Y/%m/%d %H:%M:%S")
-    start = datetime.datetime.strptime("2023/11/20 15:00:00", "%Y/%m/%d %H:%M:%S")
-    diff = now - start
-    print(diff.days)
-    print(diff.total_seconds() / (60 * 60))
+async def date(ctx):
+    now = datetime.datetime.now(hktz)
+    await ctx.send(f"now: {now.strftime('%d/%m %H:%M:%S')}\n"
+                   f"event start: {bot.end_day.strftime('%d/%m %H:%M:%S')}\n"
+                   f"event end: {bot.end_day.strftime('%d/%m %H:%M:%S')}")
 
 
 @bot.event
