@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from PIL import Image
 import numpy as np
+import dateutil.parser as dp
 import sqlite3
 import requests
 from dotenv import load_dotenv
@@ -95,7 +96,10 @@ async def on_ready():
     check_event_change.start()
     await channel.send("check_event_change started")
     predict.start()
-    await channel.send("Predict loop started")
+    await channel.send("predict loop started")
+    insert_live_rank.start()
+    await channel.send("insert_live_rank started")
+    restart_stopped_loops.start()
 
 
 @bot.event
@@ -633,6 +637,27 @@ async def predict_exited(self):
     traceback.print_exc()
 
 
+@tasks.loop(minutes=3.05, reconnect=True)  # loop every 3min 3s (api updates ~ every 3min)
+async def insert_live_rank():
+    api = "https://api.sekai.best/event/live?region=tw"
+    res = json.loads(requests.get(api).text)["data"]["eventRankings"]
+    res = [(i['eventId'], int(dp.parse(i['timestamp']).timestamp()), i['rank'], i['score'],
+            i['userId'], i['userName']) for i in res]
+    try:
+        cur.executemany("INSERT INTO liverank VALUES (?, ?, ?, ?, ?, ?)", res)
+        con.commit()
+    except sqlite3.IntegrityError:
+        pass
+
+
+@tasks.loop(minutes=5, reconnect=True)
+async def restart_stopped_loops():
+    if not predict.is_running():
+        predict.start()
+    if not insert_live_rank.is_running():
+        insert_live_rank.start()
+    
+
 @bot.command(name="role", hidden=True)
 async def role(ctx):
     reminder_message = await ctx.send(
@@ -646,10 +671,6 @@ async def role(ctx):
 @bot.command(name="start_predict", hidden=True)  # hours=1, every 00
 async def start_predict(ctx):
     if not predict.is_running():
-        now = datetime.datetime.now(hktz)
-        seconds = (60 - now.minute - 1)*60 + (60 - now.second)
-        await ctx.send("Predict starting in " + str(seconds) + " seconds")
-        await asyncio.sleep(seconds)
         predict.start()
         now = datetime.datetime.now(hktz)
         await ctx.send("Predict loop started at " + now.strftime("%H:%M:%S"))
@@ -662,24 +683,28 @@ async def end_predict(ctx):
         await ctx.send("Predict loop stopped")
 
 
+@bot.command(name="start_live_rank", hidden=True)
+async def start_live_rank(ctx):
+    if not insert_live_rank.is_running():
+        insert_live_rank.start()
+        now = datetime.datetime.now(hktz)
+        await ctx.send("insert_live_rank started at " + now.strftime("%H:%M:%S"))
+
+
 @bot.command(name="check_loops", hidden=True)
 async def check_loops(ctx):
-    """if reminder.is_running():
-        await ctx.send("Reminder loop running")
-    else:
-        await ctx.send("Reminder loop stopped")
-    if track.is_running():
-        await ctx.send("Tracker loop running")
-    else:
-        await ctx.send("Tracker loop stopped")"""
     if predict.is_running():
-        await ctx.send("Predictor loop running")
+        await ctx.send("predict running")
     else:
-        await ctx.send("Predictor loop stopped")
+        await ctx.send("predict stopped")
     if check_event_change.is_running():
-        await ctx.send("Check event change loop running")
+        await ctx.send("check_event_change running")
     else:
-        await ctx.send("Check event change loop stopped")
+        await ctx.send("check_event_change stopped")
+    if insert_live_rank.is_running():
+        await ctx.send("insert_live_rank running")
+    else:
+        await ctx.send("insert_live_rank stopped")
 
 
 # ----- commands -----
@@ -688,8 +713,8 @@ async def saki(ctx, mod=None):
     if mod == "mod":
         embed_all = discord.Embed(title="__Saki指令表(mod)__",
                                   description="天馬咲希bot由SK所寫\n以下為saki的指令介紹:"
-                                              "\n\n**!start_predict, !end_predict**"
-                                              "\nStart and end predict loop manually"
+                                              "\n\n**!start_predict, !end_predict, !start_live_rank**"
+                                              "\nStart/end loops manually"
                                               "\n\n**!check_loops**"
                                               "\nCheck loops status"
                                               "\n\n**!change_event**"
@@ -699,11 +724,12 @@ async def saki(ctx, mod=None):
                                               "\n\n**!q <query>**"
                                               "\nExecute query"
                                               "\n\n----- fix databases -----"
-                                              "\n**!create**"
-                                              "\nCreate dbs:"
+                                              "\n**!create [db=None]**"
+                                              "\nCreate db (None=all):"
                                               "\n- timept500/1000(eid, time, pt)"
                                               "\n- accuracy(eid, predict500, actual500, diff500, "
                                               "predict1000, actual1000, diff1000)"
+                                              "\n- liverank(eid, time, rank, pt, pid, pname)"
                                               "\n\n**!insert_past_events <start> <end>**"
                                               "\nInsert past event pts into dbs timept500/1000"
                                               "\n\n**!insert_0**"
@@ -712,7 +738,7 @@ async def saki(ctx, mod=None):
                                               "\nAdd synthetic pt data for missing values in timept500/1000"
                                               "\n** **",
                                   colour=0xFFDD45)
-        embed_all.set_footer(text="最後更新: 13/02/2025")
+        embed_all.set_footer(text="最後更新: 17/02/2025")
     else:
         embed_all = discord.Embed(title="__Saki指令表__",
                                   description="天馬咲希bot由SK所寫\n以下為saki的指令介紹:"
@@ -721,10 +747,15 @@ async def saki(ctx, mod=None):
                                               "\nrank: 500 | 1000"
                                               "\n例: !plot 500 36 37 59"
                                               "\n\n**!accuracy**\n查看過往活動結活當天20:00分數預測的誤差"
+                                              "\n\n**!speed <rank>**\n查看指定玩家或排名的時速"
+                                              "\nT1-50: 玩家時速"
+                                              "\nT51或以下: 排名分數線時速"
+                                              "\n(可查排名: T1-100, 200, 300, 400, 500, 1000, 1500, 2000, 2500, 3000, "
+                                              "4000, 5000, 10000, 20000, 30000, 40000, 50000)"
                                               "\n\n**!saki**\n顯示此指令表"
                                               "\n** **",
                                   colour=0xFFDD45)
-        embed_all.set_footer(text="最後更新: 03/01/2025")
+        embed_all.set_footer(text="最後更新: 17/02/2025")
     await ctx.send(embed=embed_all)
 
 
@@ -821,24 +852,106 @@ async def accuracy(ctx):
     plt.close("all")
 
 
+@bot.command(name="speed")
+async def speed(ctx, rank: int):
+    ranks = cur.execute("SELECT DISTINCT rank FROM liverank").fetchall()
+    ranks = [i[0] for i in ranks]
+    if rank not in ranks:
+        await ctx.send(f"不支持查詢T{rank}的周回 <:ln_saki_cry:1008601057380814849>\n"
+                       f"(可查 T1-100, 200, 300, 400, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, "
+                       f"10000, 20000, 30000, 40000, 50000)")
+        return
+    async with ctx.typing():
+        rank_data = cur.execute("SELECT * FROM liverank WHERE eid = ? AND rank = ? ORDER BY time DESC",
+                                (bot.event_no, rank,)).fetchone()
+
+        curr_time = rank_data[1]
+        curr_p = rank_data[3]
+
+        if 1 <= rank <= 50:
+            pname = rank_data[5]
+            pid = rank_data[4]
+            p_15 = cur.execute("SELECT pt FROM liverank WHERE eid = ? AND pid = ? AND (time BETWEEN ? AND ?)",
+                               (bot.event_no, pid, curr_time - 950, curr_time - 850)).fetchone()
+            p_30 = cur.execute("SELECT pt FROM liverank WHERE eid = ? AND pid = ? AND (time BETWEEN ? AND ?)",
+                               (bot.event_no, pid, curr_time - 1850, curr_time - 1750)).fetchone()
+            p_60 = cur.execute("SELECT pt FROM liverank WHERE eid = ? AND pid = ? AND (time BETWEEN ? AND ?)",
+                               (bot.event_no, pid, curr_time - 3650, curr_time - 3550)).fetchone()
+        else:
+            pname = ""
+            p_15 = cur.execute("SELECT pt FROM liverank WHERE eid = ? AND rank = ? AND (time BETWEEN ? AND ?)",
+                               (bot.event_no, rank, curr_time - 950, curr_time - 850)).fetchone()
+            p_30 = cur.execute("SELECT pt FROM liverank WHERE eid = ? AND rank = ? AND (time BETWEEN ? AND ?)",
+                               (bot.event_no, rank, curr_time - 1850, curr_time - 1750)).fetchone()
+            p_60 = cur.execute("SELECT pt FROM liverank WHERE eid = ? AND rank = ? AND (time BETWEEN ? AND ?)",
+                               (bot.event_no, rank, curr_time - 3650, curr_time - 3550)).fetchone()
+
+        try:
+            speed_15 = (curr_p - p_15[0])*4
+        except TypeError:
+            speed_15 = "沒有記錄"
+        try:
+            speed_30 = (curr_p - p_30[0])*2
+        except TypeError:
+            speed_30 = "沒有記錄"
+        try:
+            speed_60 = curr_p - p_60[0]
+        except TypeError:
+            speed_60 = "沒有記錄"
+
+        embed = discord.Embed(title=f"**T{rank} {pname}**",
+                              description=f"分數: {curr_p}"
+                                          f"\n- 時速: {speed_60}"
+                                          f"\n- 30min*2時速: {speed_30}"
+                                          f"\n- 15min*4時速: {speed_15}",
+                              colour=0xFFDD45)
+        embed.set_footer(text=f"最後更新: {datetime.datetime.fromtimestamp(curr_time, tz=hktz).strftime('%m/%d %H:%M:%S')}")
+    await ctx.send(embed=embed)
+
+
 # ----- databases -----
 
 @bot.command(name="create", hidden=True)
-async def create(ctx):
-    cur.execute("CREATE TABLE timept500(eid, time, pt, "
-                "PRIMARY KEY(eid, time)"
-                ")")
-    cur.execute("CREATE TABLE timept1000(eid, time, pt, "
-                "PRIMARY KEY(eid, time)"
-                ")")
+async def create(ctx, db):
+    if not db:
+        cur.execute("CREATE TABLE timept500(eid, time, pt, "
+                    "PRIMARY KEY(eid, time)"
+                    ")")
+        cur.execute("CREATE TABLE timept1000(eid, time, pt, "
+                    "PRIMARY KEY(eid, time)"
+                    ")")
+        cur.execute("CREATE TABLE accuracy(eid, predict500, actual500, diff500, predict1000, actual1000, diff1000, "
+                    "PRIMARY KEY(eid)"
+                    ")")
+        cur.execute("CREATE TABLE liverank(eid, time, rank, pt, pid, pname, "
+                    "PRIMARY KEY(eid, time, rank, pt)"
+                    ")")
+    elif db == "timept500":
+        cur.execute("CREATE TABLE timept500(eid, time, pt, "
+                    "PRIMARY KEY(eid, time)"
+                    ")")
+    elif db == "timept1000":
+        cur.execute("CREATE TABLE timept1000(eid, time, pt, "
+                    "PRIMARY KEY(eid, time)"
+                    ")")
+    elif db == "accuracy":
+        cur.execute("CREATE TABLE accuracy(eid, predict500, actual500, diff500, predict1000, actual1000, diff1000, "
+                    "PRIMARY KEY(eid)"
+                    ")")
+    elif db == "liverank":
+        cur.execute("CREATE TABLE liverank(eid, time, rank, pt, pid, pname, "
+                    "PRIMARY KEY(eid, time, rank, pt)"
+                    ")")
+    else:
+        await ctx.send("Incorrect db name (timept500/1000, accuracy, liverank)")
+        return
+    await ctx.send("Db created successfully")
+
     """
     cur.execute("CREATE TABLE tracker(time, rank, pt, "
                 "PRIMARY KEY(time, rank)"
                 ")")
     """
-    cur.execute("CREATE TABLE accuracy(eid, predict500, actual500, diff500, predict1000, actual1000, diff1000, "
-                "PRIMARY KEY(eid)"
-                ")")
 
 
 @bot.command(name="q", hidden=True)
